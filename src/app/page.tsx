@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { QrCode, Mic, ArrowRight } from "lucide-react";
 
 export default function HomePage() {
   return (
@@ -43,6 +44,7 @@ export default function HomePage() {
           </a>
         </div>
 
+        {/* How It Works */}
         <section id="how-it-works" className="mt-32 text-left">
           <h3 className="text-2xl font-bold mb-8 text-center">How It Works</h3>
           <div className="grid gap-8 md:grid-cols-3">
@@ -70,6 +72,38 @@ export default function HomePage() {
                 answers their questions. Need a human? It escalates seamlessly.
               </p>
             </div>
+          </div>
+        </section>
+
+        {/* Try Demo Section */}
+        <section className="mt-32 mb-16">
+          <h3 className="text-2xl font-bold mb-4 text-center">Try the Demo</h3>
+          <p className="text-slate-400 mb-8 text-center max-w-md mx-auto">
+            See how your customers will experience voice-guided product support.
+            Scan the QR code below or tap the button to try it out.
+          </p>
+
+          <div className="mx-auto max-w-sm rounded-2xl bg-white/5 border border-white/10 p-8">
+            {/* QR Placeholder */}
+            <div className="mx-auto w-48 h-48 rounded-xl bg-white/10 border-2 border-dashed border-white/20 flex flex-col items-center justify-center mb-6">
+              <QrCode className="w-16 h-16 text-white/30 mb-2" />
+              <p className="text-xs text-white/40">Demo QR Code</p>
+            </div>
+
+            <div className="flex items-center gap-3 mb-6">
+              <div className="flex-1 h-px bg-white/10" />
+              <span className="text-xs text-slate-500 uppercase tracking-wider">or</span>
+              <div className="flex-1 h-px bg-white/10" />
+            </div>
+
+            <Link
+              href="/voice?code=demo"
+              className="w-full flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-6 py-3 font-medium hover:bg-blue-500 transition"
+            >
+              <Mic className="w-5 h-5" />
+              Try Voice Assistant
+              <ArrowRight className="w-4 h-4" />
+            </Link>
           </div>
         </section>
       </main>

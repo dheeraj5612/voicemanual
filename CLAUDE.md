@@ -18,7 +18,7 @@ npx prisma generate  # Regenerate Prisma client after schema changes
 - **Framework**: Next.js 15 (App Router, Server Components, Route Handlers)
 - **Language**: TypeScript (strict mode)
 - **AI**: Anthropic Claude via `@anthropic-ai/sdk` (model: `claude-sonnet-4-20250514`)
-- **Voice TTS**: ElevenLabs API (`eleven_turbo_v2_5`)
+- **Voice TTS**: ElevenLabs API (`eleven_turbo_v2_5`) + browser SpeechSynthesis fallback
 - **Voice STT**: Web Speech API (browser-native, no API key needed)
 - **Database**: Prisma ORM + SQLite (dev) — switch to PostgreSQL + pgvector for production
 - **Styling**: Tailwind CSS v4 (via `@tailwindcss/postcss`)
@@ -30,52 +30,94 @@ npx prisma generate  # Regenerate Prisma client after schema changes
 
 ```
 src/
-├── app/                          # Next.js App Router
-│   ├── layout.tsx                # Root layout (Inter font, metadata)
-│   ├── page.tsx                  # Landing page
-│   ├── globals.css               # Tailwind import
-│   ├── dashboard/page.tsx        # Manufacturer dashboard (client component)
-│   ├── voice/[sessionId]/page.tsx # Customer voice chat interface
+├── app/                                    # Next.js App Router
+│   ├── layout.tsx                          # Root layout (Inter font, metadata)
+│   ├── page.tsx                            # Landing page
+│   ├── globals.css                         # Tailwind import + utility classes
+│   ├── dashboard/page.tsx                  # Manufacturer dashboard (client component)
+│   ├── voice/page.tsx                      # QR landing / session starter
+│   ├── voice/[sessionId]/page.tsx          # Customer voice chat interface
 │   └── api/
-│       ├── voice/route.ts        # POST — send message, get AI response
-│       ├── voice/tts/route.ts    # POST — text-to-speech audio
-│       ├── manuals/route.ts      # POST — upload and parse manual
-│       ├── qr/route.ts           # POST — generate QR code for product
-│       └── escalation/route.ts   # GET pending, PATCH resolve
+│       ├── voice/route.ts                  # POST — RAG chat pipeline (12-step)
+│       ├── voice/tts/route.ts              # POST — text-to-speech audio
+│       ├── session/route.ts                # POST create, GET details, PATCH update
+│       ├── qr/route.ts                     # POST create, GET resolve
+│       ├── escalation/route.ts             # POST create, GET list, PATCH resolve
+│       ├── analytics/route.ts              # GET aggregated, POST track event
+│       ├── ingest/route.ts                 # POST ingest document into KP
+│       └── ingest/publish/route.ts         # POST publish or rollback KP
 ├── lib/
-│   ├── ai.ts                     # Claude AI integration + system prompt builder
-│   ├── voice.ts                  # ElevenLabs TTS synthesis
-│   ├── manual-parser.ts          # Heading-aware chunking for RAG
-│   ├── qr.ts                     # QR code generation (PNG + SVG)
-│   ├── escalation.ts             # Human escalation flow
-│   ├── db.ts                     # Prisma client singleton
-│   └── utils.ts                  # nanoid, cn, truncate
+│   ├── ai.ts                               # Claude RAG answering + structured JSON output
+│   ├── safety.ts                            # Deterministic safety classifier (keywords + confidence)
+│   ├── analytics.ts                         # Event tracking + SKU/brand aggregation
+│   ├── manual-parser.ts                     # Heading-aware document chunking (200-500 tokens)
+│   ├── ingestion.ts                         # KnowledgePackage lifecycle (draft → active → archived)
+│   ├── retrieval.ts                         # Hybrid keyword retrieval with TF-IDF scoring
+│   ├── qr.ts                               # QR code generation (PNG/SVG, short codes)
+│   ├── escalation.ts                        # Case creation, resolution, webhook delivery
+│   ├── voice.ts                             # ElevenLabs TTS synthesis
+│   ├── db.ts                               # Prisma client singleton
+│   └── utils.ts                            # nanoid, cn, truncate
 ├── types/
-│   ├── index.ts                  # Shared types (VoiceConfig, ChatMessage, etc.)
-│   └── speech.d.ts               # Web Speech API type declarations
-└── components/                   # Shared React components (empty — to be built)
+│   ├── index.ts                            # 20 shared types (StructuredResponse, Citation, etc.)
+│   └── speech.d.ts                         # Web Speech API type declarations
+└── components/
+    ├── StructuredAnswer.tsx                 # Renders AI response (steps, citations, warnings)
+    └── EscalationForm.tsx                  # Support case submission form
 prisma/
-└── schema.prisma                 # Database schema
+└── schema.prisma                           # Database schema (13 models, 9 enums)
 ```
 
 ## Architecture Patterns
 
+### Data Model (13 models)
+
+Brand → ProductLine → SKU → KnowledgePackage (versioned) → Document → Chunk
+Session → Message, Case, AnalyticsEvent, SafetyTrigger
+Agent (support agents per brand)
+
+Key enums: `KnowledgePackageStatus` (DRAFT/ACTIVE/ARCHIVED), `SessionStatus` (ACTIVE/ESCALATED/RESOLVED/ABANDONED), `CaseStatus` (OPEN/ASSIGNED/IN_PROGRESS/RESOLVED/CLOSED), `SafetySeverity` (LOW/MEDIUM/HIGH/CRITICAL)
+
 ### RAG Pipeline
-Manuals are parsed into overlapping chunks (`manual-parser.ts`) and stored in `ManualChunk`. On each voice chat request, relevant chunks are retrieved and injected into the Claude system prompt as context. The `embedding` field is a placeholder — replace with real vector embeddings + pgvector similarity search for production.
+
+1. Manuals ingested via `/api/ingest` → parsed into heading-aware chunks (manual-parser.ts)
+2. Chunks stored in `Chunk` table with placeholder embeddings
+3. On chat request, `retrieval.ts` finds ACTIVE KnowledgePackage for SKU, scores chunks via TF-IDF
+4. Top-K chunks injected into Claude system prompt with citation metadata
+5. Claude returns strict JSON (`StructuredResponse`) with citations, steps, warnings, confidence
+
+### Safety System
+
+Deterministic keyword-based safety classifier in `safety.ts`:
+- CRITICAL: safety bypass attempts → block
+- HIGH: electrical, gas/fire, medical, child safety → escalate
+- MEDIUM: warranty-voiding, sharp tools → warn
+- Also checks retrieval confidence (< 0.3) and response confidence (< 0.6)
 
 ### Escalation Detection
-The AI detects when to escalate via an inline `[ESCALATE: reason]` tag in its response. The `ai.ts` module parses this tag out, cleans the user-facing text, and triggers the escalation flow. Escalation creates a record, finds an available agent in the same org, and updates the session status.
+
+AI sets `escalationRecommended: true` when confidence < 0.6 or safety concern detected. The voice route auto-creates a Case record with transcript, steps attempted, and sources used.
 
 ### Voice Flow
-Customer scans QR → creates VoiceSession → sends messages via `/api/voice` → Claude responds using manual context → response spoken via ElevenLabs TTS (or browser SpeechSynthesis fallback) → if escalation detected, session transitions to ESCALATED status.
 
-## Database
+Customer scans QR → resolves SKU via `/api/qr` → creates Session via `/api/session` → sends messages via `/api/voice` → Claude responds with structured JSON using manual context → response spoken via browser SpeechSynthesis (ElevenLabs TTS available via `/api/voice/tts`) → if escalation detected, session transitions to ESCALATED.
 
-8 models: `Organization`, `Product`, `Manual`, `ManualChunk`, `QRCode`, `VoiceSession`, `Message`, `Escalation`, `Agent`
+### Knowledge Package Versioning
 
-Key enums: `SessionStatus` (ACTIVE/ESCALATED/RESOLVED/ABANDONED), `MessageRole` (USER/ASSISTANT/SYSTEM), `EscalationStatus` (PENDING/ASSIGNED/IN_PROGRESS/RESOLVED)
+Each SKU has versioned KnowledgePackages (DRAFT → ACTIVE → ARCHIVED). Only one ACTIVE package per SKU at a time. Publishing archives the previous ACTIVE version. Rollback re-activates the most recent ARCHIVED version.
 
-All cascading deletes flow from Organization → Product → downstream entities.
+## API Routes
+
+| Route | Methods | Purpose |
+|-------|---------|---------|
+| `/api/voice` | POST | Send message, get AI response (12-step RAG pipeline) |
+| `/api/voice/tts` | POST | Text-to-speech audio via ElevenLabs |
+| `/api/session` | POST, GET, PATCH | Create/read/update sessions |
+| `/api/qr` | POST, GET | Generate QR codes, resolve short codes |
+| `/api/escalation` | POST, GET, PATCH | Create/list/resolve support cases |
+| `/api/analytics` | GET, POST | Aggregated analytics, track events |
+| `/api/ingest` | POST | Ingest document into DRAFT KnowledgePackage |
+| `/api/ingest/publish` | POST | Publish KP or rollback to previous version |
 
 ## Environment Variables
 

@@ -1,49 +1,85 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { resolveEscalation } from "@/lib/escalation";
-import { db } from "@/lib/db";
+import { createCase, resolveCase, getCasesForBrand } from "@/lib/escalation";
 
-const resolveSchema = z.object({
-  escalationId: z.string(),
+// ─── Validation Schemas ──────────────────────────────────────────────────────
+
+const createCaseSchema = z.object({
+  sessionId: z.string().min(1, "sessionId is required"),
+  email: z.string().email().optional(),
+  category: z.string().optional(),
+  description: z.string().optional(),
+  photoUrls: z.array(z.string().url()).optional(),
 });
 
-/** List pending escalations for an organization */
-export async function GET(request: NextRequest) {
-  const orgId = request.nextUrl.searchParams.get("organizationId");
-  if (!orgId) {
+const resolveCaseSchema = z.object({
+  caseId: z.string().min(1, "caseId is required"),
+});
+
+// ─── POST: Create a case ─────────────────────────────────────────────────────
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const validated = createCaseSchema.parse(body);
+
+    const result = await createCase(validated);
+
+    return NextResponse.json({
+      caseId: result.caseId,
+      agentAssigned: result.agentAssigned,
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { error: "Invalid request", details: error.errors },
+        { status: 400 }
+      );
+    }
+    console.error("Case creation error:", error);
     return NextResponse.json(
-      { error: "organizationId query param required" },
-      { status: 400 }
+      { error: "Failed to create case" },
+      { status: 500 }
     );
   }
-
-  const escalations = await db.escalation.findMany({
-    where: {
-      status: { in: ["PENDING", "ASSIGNED", "IN_PROGRESS"] },
-      session: { product: { organizationId: orgId } },
-    },
-    include: {
-      session: {
-        include: {
-          product: { select: { name: true } },
-          messages: { orderBy: { createdAt: "desc" }, take: 5 },
-        },
-      },
-      agent: { select: { name: true, email: true } },
-    },
-    orderBy: { createdAt: "desc" },
-  });
-
-  return NextResponse.json(escalations);
 }
 
-/** Resolve an escalation */
+// ─── GET: List cases for a brand ─────────────────────────────────────────────
+
+export async function GET(request: NextRequest) {
+  try {
+    const brandId = request.nextUrl.searchParams.get("brandId");
+    const status = request.nextUrl.searchParams.get("status");
+
+    if (!brandId) {
+      return NextResponse.json(
+        { error: "brandId query parameter is required" },
+        { status: 400 }
+      );
+    }
+
+    const cases = await getCasesForBrand(brandId, {
+      ...(status ? { status } : {}),
+    });
+
+    return NextResponse.json(cases);
+  } catch (error) {
+    console.error("Case listing error:", error);
+    return NextResponse.json(
+      { error: "Failed to list cases" },
+      { status: 500 }
+    );
+  }
+}
+
+// ─── PATCH: Resolve a case ───────────────────────────────────────────────────
+
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
-    const { escalationId } = resolveSchema.parse(body);
+    const { caseId } = resolveCaseSchema.parse(body);
 
-    await resolveEscalation(escalationId);
+    await resolveCase(caseId);
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -53,9 +89,9 @@ export async function PATCH(request: NextRequest) {
         { status: 400 }
       );
     }
-    console.error("Escalation resolve error:", error);
+    console.error("Case resolve error:", error);
     return NextResponse.json(
-      { error: "Failed to resolve escalation" },
+      { error: "Failed to resolve case" },
       { status: 500 }
     );
   }

@@ -7,132 +7,38 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// A manufacturer or company that owns products
-model Organization {
-  id        String    @id @default(cuid())
-  name      String
-  slug      String    @unique
-  voiceConfig Json?   // voice persona settings (tone, language, personality)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+// ─── Enums ──────────────────────────────────────────────────────────────────
 
-  products  Product[]
-  agents    Agent[]
+enum KnowledgePackageStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
 }
 
-/// A physical product that has manuals/instructions
-model Product {
-  id             String   @id @default(cuid())
-  name           String
-  model          String?
-  description    String?
-  organizationId String
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  manuals      Manual[]
-  qrCodes      QRCode[]
-  sessions     VoiceSession[]
+enum DocumentType {
+  MANUAL
+  TROUBLESHOOTING_KB
+  WARRANTY
+  SERVICE_BULLETIN
 }
 
-/// An uploaded manual or instruction document
-model Manual {
-  id        String   @id @default(cuid())
-  title     String
-  content   String   // parsed text content from PDF/document
-  sourceUrl String?  // original file URL
-  productId String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
-  chunks  ManualChunk[]
+enum ChunkContentType {
+  PROCEDURE
+  WARNING
+  SPECS
+  TROUBLESHOOTING
+  GENERAL
 }
 
-/// Chunked and embedded manual content for RAG retrieval
-model ManualChunk {
-  id        String @id @default(cuid())
-  content   String
-  embedding String // serialized vector embedding
-  section   String? // section heading if available
-  pageNum   Int?
-  manualId  String
-
-  manual Manual @relation(fields: [manualId], references: [id], onDelete: Cascade)
-}
-
-/// Generated QR codes that link customers to voice sessions
-model QRCode {
-  id        String   @id @default(cuid())
-  productId String
-  shortCode String   @unique // short URL-safe code
-  scanCount Int      @default(0)
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-
-  product  Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
-  sessions VoiceSession[]
-}
-
-/// A customer voice interaction session
-model VoiceSession {
-  id         String        @id @default(cuid())
-  productId  String
-  qrCodeId   String?
-  status     SessionStatus @default(ACTIVE)
-  createdAt  DateTime      @default(now())
-  endedAt    DateTime?
-
-  product    Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
-  qrCode     QRCode?       @relation(fields: [qrCodeId], references: [id])
-  messages   Message[]
-  escalation Escalation?
-}
-
-/// Individual messages in a voice session
-model Message {
-  id        String      @id @default(cuid())
-  role      MessageRole
-  content   String
-  audioUrl  String?     // URL to TTS audio if generated
-  sessionId String
-  createdAt DateTime    @default(now())
-
-  session VoiceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-}
-
-/// Escalation to human customer service
-model Escalation {
-  id           String           @id @default(cuid())
-  sessionId    String           @unique
-  reason       String
-  status       EscalationStatus @default(PENDING)
-  agentId      String?
-  resolvedAt   DateTime?
-  createdAt    DateTime         @default(now())
-
-  session VoiceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  agent   Agent?       @relation(fields: [agentId], references: [id])
-}
-
-/// Human support agent
-model Agent {
-  id             String   @id @default(cuid())
-  name           String
-  email          String   @unique
-  organizationId String
-  available      Boolean  @default(true)
-  createdAt      DateTime @default(now())
-
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  escalations  Escalation[]
+enum SessionSource {
+  QR
+  DIRECT
 }
 
 enum SessionStatus {
   ACTIVE
-  ESCALATED
   RESOLVED
+  ESCALATED
   ABANDONED
 }
 
@@ -142,9 +48,257 @@ enum MessageRole {
   SYSTEM
 }
 
-enum EscalationStatus {
-  PENDING
+enum CaseStatus {
+  OPEN
   ASSIGNED
   IN_PROGRESS
   RESOLVED
+  CLOSED
+}
+
+enum SafetySeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum SafetyAction {
+  WARNED
+  ESCALATED
+  BLOCKED
+}
+
+// ─── Models ─────────────────────────────────────────────────────────────────
+
+/// A manufacturer or company that owns product lines
+model Brand {
+  id              String   @id @default(cuid())
+  name            String
+  slug            String   @unique
+  logoUrl         String?
+  defaultLanguage String   @default("en")
+  voiceConfig     Json?    // VoiceConfig: tone, language, personality, greetingTemplate
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  productLines ProductLine[]
+  agents       Agent[]
+}
+
+/// A family of products under a brand (e.g. "Dyson V15 Series")
+model ProductLine {
+  id          String   @id @default(cuid())
+  brandId     String
+  name        String
+  description String?
+  imageUrl    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  brand Brand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  skus  SKU[]
+
+  @@index([brandId])
+}
+
+/// A specific stock-keeping unit — one product, one region, one language
+model SKU {
+  id              String   @id @default(cuid())
+  productLineId   String
+  sku             String   @unique
+  region          String   @default("US")
+  language        String   @default("en")
+  firmwareVersion String?
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  productLine       ProductLine        @relation(fields: [productLineId], references: [id], onDelete: Cascade)
+  knowledgePackages KnowledgePackage[]
+  qrCodes           QRCode[]
+  sessions          Session[]
+  cases             Case[]
+
+  @@index([productLineId])
+}
+
+/// A versioned bundle of documents for a SKU (draft → active → archived)
+model KnowledgePackage {
+  id          String                 @id @default(cuid())
+  skuId       String
+  version     Int
+  status      KnowledgePackageStatus @default(DRAFT)
+  createdAt   DateTime               @default(now())
+  publishedAt DateTime?
+
+  sku       SKU        @relation(fields: [skuId], references: [id], onDelete: Cascade)
+  documents Document[]
+
+  @@unique([skuId, version])
+  @@index([skuId])
+}
+
+/// An uploaded manual, troubleshooting KB, warranty doc, or service bulletin
+model Document {
+  id                 String       @id @default(cuid())
+  knowledgePackageId String
+  type               DocumentType
+  title              String
+  sourceUrl          String?
+  rawContent         String       // full extracted text
+  parsedAt           DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  knowledgePackage KnowledgePackage @relation(fields: [knowledgePackageId], references: [id], onDelete: Cascade)
+  chunks           Chunk[]
+
+  @@index([knowledgePackageId])
+}
+
+/// Chunked and embedded content for RAG retrieval
+model Chunk {
+  id          String           @id @default(cuid())
+  documentId  String
+  content     String
+  embedding   String           // serialized vector
+  pageStart   Int
+  pageEnd     Int
+  sectionPath String           // "H1/H2/H3" breadcrumb
+  contentType ChunkContentType
+  tokenCount  Int
+  chunkIndex  Int
+  createdAt   DateTime         @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+}
+
+/// Generated QR code that deep-links a customer into a session
+model QRCode {
+  id         String   @id @default(cuid())
+  skuId      String
+  shortCode  String   @unique
+  parameters Json     // QRParameters: brandId, productId, sku, region, language, firmware
+  scanCount  Int      @default(0)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  sku      SKU       @relation(fields: [skuId], references: [id], onDelete: Cascade)
+  sessions Session[]
+
+  @@index([skuId])
+  @@index([shortCode])
+}
+
+/// A customer support conversation session
+model Session {
+  id                      String        @id @default(cuid())
+  skuId                   String
+  knowledgePackageVersion Int           // snapshot of active KP version at session start
+  language                String
+  source                  SessionSource @default(QR)
+  qrCodeId                String?
+  status                  SessionStatus @default(ACTIVE)
+  resolvedAt              DateTime?
+  createdAt               DateTime      @default(now())
+
+  sku             SKU              @relation(fields: [skuId], references: [id], onDelete: Cascade)
+  qrCode          QRCode?          @relation(fields: [qrCodeId], references: [id])
+  messages        Message[]
+  case            Case?
+  analyticsEvents AnalyticsEvent[]
+  safetyTriggers  SafetyTrigger[]
+
+  @@index([skuId])
+  @@index([qrCodeId])
+  @@index([status])
+}
+
+/// Individual message in a session conversation
+model Message {
+  id                 String      @id @default(cuid())
+  sessionId          String
+  role               MessageRole
+  content            String
+  structuredResponse Json?       // StructuredResponse: citation-rich response schema
+  audioUrl           String?
+  createdAt          DateTime    @default(now())
+
+  session        Session         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  safetyTriggers SafetyTrigger[]
+
+  @@index([sessionId])
+}
+
+/// Escalation ticket created when AI cannot resolve the issue
+model Case {
+  id             String     @id @default(cuid())
+  sessionId      String     @unique
+  skuId          String
+  category       String?
+  email          String?
+  description    String?
+  photoUrls      Json?      // string[]
+  status         CaseStatus @default(OPEN)
+  assignedTo     String?
+  transcript     String     // full conversation text
+  stepsAttempted Json?      // string[]
+  sourcesUsed    Json?      // Citation[]
+  webhookSent    Boolean    @default(false)
+  createdAt      DateTime   @default(now())
+  resolvedAt     DateTime?
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sku     SKU     @relation(fields: [skuId], references: [id], onDelete: Cascade)
+
+  @@index([skuId])
+  @@index([status])
+}
+
+/// Human support agent belonging to a brand
+model Agent {
+  id        String   @id @default(cuid())
+  brandId   String
+  name      String
+  email     String   @unique
+  available Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  brand Brand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@index([brandId])
+}
+
+/// Analytics event for dashboards and reporting
+model AnalyticsEvent {
+  id        String   @id @default(cuid())
+  sessionId String
+  eventType String   // qr_scan, session_start, question, answer, solved, escalated, etc.
+  payload   Json
+  createdAt DateTime @default(now())
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([eventType])
+}
+
+/// Safety trigger fired when a message touches dangerous topics
+model SafetyTrigger {
+  id          String         @id @default(cuid())
+  messageId   String
+  sessionId   String
+  triggerType String         // electrical, gas_fire, medical, child_safety, warranty_void, sharp_tools
+  severity    SafetySeverity
+  action      SafetyAction
+  createdAt   DateTime       @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([sessionId])
 }
