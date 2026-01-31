@@ -1,0 +1,150 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// A manufacturer or company that owns products
+model Organization {
+  id        String    @id @default(cuid())
+  name      String
+  slug      String    @unique
+  voiceConfig Json?   // voice persona settings (tone, language, personality)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  products  Product[]
+  agents    Agent[]
+}
+
+/// A physical product that has manuals/instructions
+model Product {
+  id             String   @id @default(cuid())
+  name           String
+  model          String?
+  description    String?
+  organizationId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  manuals      Manual[]
+  qrCodes      QRCode[]
+  sessions     VoiceSession[]
+}
+
+/// An uploaded manual or instruction document
+model Manual {
+  id        String   @id @default(cuid())
+  title     String
+  content   String   // parsed text content from PDF/document
+  sourceUrl String?  // original file URL
+  productId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  chunks  ManualChunk[]
+}
+
+/// Chunked and embedded manual content for RAG retrieval
+model ManualChunk {
+  id        String @id @default(cuid())
+  content   String
+  embedding String // serialized vector embedding
+  section   String? // section heading if available
+  pageNum   Int?
+  manualId  String
+
+  manual Manual @relation(fields: [manualId], references: [id], onDelete: Cascade)
+}
+
+/// Generated QR codes that link customers to voice sessions
+model QRCode {
+  id        String   @id @default(cuid())
+  productId String
+  shortCode String   @unique // short URL-safe code
+  scanCount Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  product  Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sessions VoiceSession[]
+}
+
+/// A customer voice interaction session
+model VoiceSession {
+  id         String        @id @default(cuid())
+  productId  String
+  qrCodeId   String?
+  status     SessionStatus @default(ACTIVE)
+  createdAt  DateTime      @default(now())
+  endedAt    DateTime?
+
+  product    Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  qrCode     QRCode?       @relation(fields: [qrCodeId], references: [id])
+  messages   Message[]
+  escalation Escalation?
+}
+
+/// Individual messages in a voice session
+model Message {
+  id        String      @id @default(cuid())
+  role      MessageRole
+  content   String
+  audioUrl  String?     // URL to TTS audio if generated
+  sessionId String
+  createdAt DateTime    @default(now())
+
+  session VoiceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
+/// Escalation to human customer service
+model Escalation {
+  id           String           @id @default(cuid())
+  sessionId    String           @unique
+  reason       String
+  status       EscalationStatus @default(PENDING)
+  agentId      String?
+  resolvedAt   DateTime?
+  createdAt    DateTime         @default(now())
+
+  session VoiceSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  agent   Agent?       @relation(fields: [agentId], references: [id])
+}
+
+/// Human support agent
+model Agent {
+  id             String   @id @default(cuid())
+  name           String
+  email          String   @unique
+  organizationId String
+  available      Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  escalations  Escalation[]
+}
+
+enum SessionStatus {
+  ACTIVE
+  ESCALATED
+  RESOLVED
+  ABANDONED
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum EscalationStatus {
+  PENDING
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+}
