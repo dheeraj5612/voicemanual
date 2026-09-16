@@ -2,6 +2,16 @@
 
 AI-powered voice assistant for product manuals. Customers scan a QR code and get instant, spoken answers about their product — with seamless escalation to human support when needed.
 
+## Engineering walkthrough
+
+This project connects product documentation to a voice support workflow: retrieve manual context, generate a structured response, speak it aloud, and offer human escalation.
+
+Start with [`src/lib/ai.ts`](src/lib/ai.ts) for the prompt and response handling, then [`src/lib/manual-parser.ts`](src/lib/manual-parser.ts) for document processing and [`src/lib/escalation.ts`](src/lib/escalation.ts) for the handoff logic.
+
+The AI layer requests source citations and structured fields for steps, warnings, confidence, and escalation. It logs a prompt version/hash and retrieval IDs, and recommends escalation when response parsing fails. These are inspectable implementation choices; prompting alone does not guarantee answer accuracy.
+
+See **Getting Started** below to run locally with your own service credentials.
+
 ## Features
 
 - **Voice AI Assistant** — Answers customer questions using your product manual, powered by Claude
